@@ -5,6 +5,7 @@ from google import genai
 from google.genai import types
 import os
 import json
+import time
 from dotenv import load_dotenv
 from threading import RLock
 
@@ -60,6 +61,30 @@ cache_codes = {}
 cache_detailed_codes = {}
 cache_lock = RLock()
 
+# Add a 1-hour TTL and simple cache helpers
+CACHE_TTL_SECONDS = 60 * 60
+
+def _cache_get(cache: dict, key: str):
+    now = time.time()
+    with cache_lock:
+        entry = cache.get(key)
+        if not entry:
+            return None
+        value, expires_at = entry
+        if expires_at is None or now < expires_at:
+            return value
+        # Expired: remove and miss
+        try:
+            del cache[key]
+        except KeyError:
+            pass
+        return None
+
+def _cache_set(cache: dict, key: str, value, ttl: int = CACHE_TTL_SECONDS):
+    expires_at = (time.time() + ttl) if ttl else None
+    with cache_lock:
+        cache[key] = (value, expires_at)
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -79,9 +104,8 @@ async def generate_response(request: PromptRequest):
     try:
         # Cache check (MVP)
         key = request.prompt.strip()
-        with cache_lock:
-            cached = cache_generate.get(key)
-        if cached:
+        cached = _cache_get(cache_generate, key)
+        if cached is not None:
             return cached
 
         # Add system instruction for concise responses
@@ -136,8 +160,7 @@ async def generate_response(request: PromptRequest):
 
         # Store in cache before returning
         resp_obj = PromptResponse(response=response)
-        with cache_lock:
-            cache_generate[key] = resp_obj
+        _cache_set(cache_generate, key, resp_obj)
         return resp_obj
 
     except Exception as e:
@@ -157,9 +180,8 @@ async def get_codes(request: PromptRequest):
     try:
         # Cache check (MVP)
         key = request.prompt.strip()
-        with cache_lock:
-            cached = cache_codes.get(key)
-        if cached:
+        cached = _cache_get(cache_codes, key)
+        if cached is not None:
             return cached
 
         # Add system instruction for finding codes
@@ -252,8 +274,7 @@ async def get_codes(request: PromptRequest):
         
         # Store in cache before returning
         resp_obj = CodesResponse(codes=codes)
-        with cache_lock:
-            cache_codes[key] = resp_obj
+        _cache_set(cache_codes, key, resp_obj)
         return resp_obj
 
     except Exception as e:
@@ -273,9 +294,8 @@ async def get_detailed_codes(request: PromptRequest):
     try:
         # Cache check (MVP)
         key = request.prompt.strip()
-        with cache_lock:
-            cached = cache_detailed_codes.get(key)
-        if cached:
+        cached = _cache_get(cache_detailed_codes, key)
+        if cached is not None:
             return cached
 
         # Add system instruction for finding codes with details
@@ -446,8 +466,7 @@ async def get_detailed_codes(request: PromptRequest):
         
         # Store in cache before returning
         resp_obj = DetailedCodesResponse(codes=detailed_codes)
-        with cache_lock:
-            cache_detailed_codes[key] = resp_obj
+        _cache_set(cache_detailed_codes, key, resp_obj)
         return resp_obj
 
     except Exception as e:
