@@ -6,6 +6,7 @@ from google.genai import types
 import os
 import json
 from dotenv import load_dotenv
+from threading import RLock
 
 # Load environment variables
 load_dotenv()
@@ -53,6 +54,12 @@ class CodesResponse(BaseModel):
 class DetailedCodesResponse(BaseModel):
     codes: List[CodeInfo]
 
+# Simple in-memory caches (MVP)
+cache_generate = {}
+cache_codes = {}
+cache_detailed_codes = {}
+cache_lock = RLock()
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -70,6 +77,13 @@ async def generate_response(request: PromptRequest):
         PromptResponse containing Gemini's response
     """
     try:
+        # Cache check (MVP)
+        key = request.prompt.strip()
+        with cache_lock:
+            cached = cache_generate.get(key)
+        if cached:
+            return cached
+
         # Add system instruction for concise responses
         system_instruction = "You are a concise assistant. Provide direct, brief answers without explanations, duplications, or additional context. When asked for codes or specific information, output only what was requested in a clean format, nothing more."
         
@@ -120,7 +134,11 @@ async def generate_response(request: PromptRequest):
         if not response:
             raise HTTPException(status_code=500, detail="No response generated from Gemini")
 
-        return PromptResponse(response=response)
+        # Store in cache before returning
+        resp_obj = PromptResponse(response=response)
+        with cache_lock:
+            cache_generate[key] = resp_obj
+        return resp_obj
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
@@ -137,6 +155,13 @@ async def get_codes(request: PromptRequest):
         CodesResponse containing a list of codes
     """
     try:
+        # Cache check (MVP)
+        key = request.prompt.strip()
+        with cache_lock:
+            cached = cache_codes.get(key)
+        if cached:
+            return cached
+
         # Add system instruction for finding codes
         system_instruction = "You are a code finder. Search the web for coupon codes based on the user's request. Return only the actual codes you find, separated by commas or on new lines. Include any conditions or restrictions if mentioned (e.g., minimum purchase, new customers only, expiration dates). Format: CODE - description/conditions. Do not include long explanations."
         
@@ -225,7 +250,11 @@ async def get_codes(request: PromptRequest):
                     word not in codes):
                     codes.append(word)
         
-        return CodesResponse(codes=codes)
+        # Store in cache before returning
+        resp_obj = CodesResponse(codes=codes)
+        with cache_lock:
+            cache_codes[key] = resp_obj
+        return resp_obj
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating codes: {str(e)}")
@@ -242,6 +271,13 @@ async def get_detailed_codes(request: PromptRequest):
         DetailedCodesResponse containing a list of codes with details
     """
     try:
+        # Cache check (MVP)
+        key = request.prompt.strip()
+        with cache_lock:
+            cached = cache_detailed_codes.get(key)
+        if cached:
+            return cached
+
         # Add system instruction for finding codes with details
         system_instruction = """You are a detailed code finder. Search the web for coupon codes based on the user's request. 
         
@@ -354,10 +390,10 @@ async def get_detailed_codes(request: PromptRequest):
                     
                     # Check if we have meaningful data
                     has_description = (description and 
-                                     description.lower() not in ["discount amount not specified", "discount not specified", "amount not specified", ""])
+                                     description.lower() not in ["discount amount not specified", "discount not specified", "amount not specified", ""]) 
                     has_conditions = (conditions and 
                                     conditions.lower() not in ["no specific conditions mentioned", "no specific conditions found", 
-                                                              "conditions not specified", "no conditions", ""])
+                                                              "conditions not specified", "no conditions", ""]) 
                     
                     # Set placeholders if no meaningful data
                     if not has_description:
@@ -389,7 +425,7 @@ async def get_detailed_codes(request: PromptRequest):
                         
                         # Check if we have meaningful description
                         has_description = (description and 
-                                         description.lower() not in ["discount amount not specified", "discount not specified", "amount not specified"])
+                                         description.lower() not in ["discount amount not specified", "discount not specified", "amount not specified"]) 
                         has_conditions = False  # No conditions in dash format
                         
                         # Set placeholder if no meaningful data
@@ -408,7 +444,11 @@ async def get_detailed_codes(request: PromptRequest):
                                 has_conditions=has_conditions
                             ))
         
-        return DetailedCodesResponse(codes=detailed_codes)
+        # Store in cache before returning
+        resp_obj = DetailedCodesResponse(codes=detailed_codes)
+        with cache_lock:
+            cache_detailed_codes[key] = resp_obj
+        return resp_obj
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating detailed codes: {str(e)}")
