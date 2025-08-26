@@ -5,9 +5,8 @@ from google import genai
 from google.genai import types
 import os
 import json
-import time
 from dotenv import load_dotenv
-from threading import RLock
+import redis
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +26,9 @@ if not GEMINI_API_KEY:
 client = genai.Client(
         api_key=GEMINI_API_KEY,
     )
+
+REDIS_URL = os.getenv("REDIS_URL")
+redis_client = redis.Redis.from_url(REDIS_URL)
 
 # Initialize the Gemini model
 model = "gemini-2.5-flash"
@@ -55,230 +57,38 @@ class CodesResponse(BaseModel):
 class DetailedCodesResponse(BaseModel):
     codes: List[CodeInfo]
 
-# Simple in-memory caches (MVP)
-cache_generate = {}
-cache_codes = {}
-cache_detailed_codes = {}
-cache_lock = RLock()
-
-# Add a 1-hour TTL and simple cache helpers
+# Redis-based cache with TTL
 CACHE_TTL_SECONDS = 60 * 60
 
-def _cache_get(cache: dict, key: str):
-    now = time.time()
-    with cache_lock:
-        entry = cache.get(key)
-        if not entry:
-            return None
-        value, expires_at = entry
-        if expires_at is None or now < expires_at:
-            return value
-        # Expired: remove and miss
-        try:
-            del cache[key]
-        except KeyError:
-            pass
+def _cache_get(cache_prefix: str, key: str):
+    """Get value from Redis cache"""
+    try:
+        cache_key = f"{cache_prefix}:{key}"
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            return json.loads(cached_data)
+        return None
+    except Exception as e:
+        print(f"Cache get error: {e}")
         return None
 
-def _cache_set(cache: dict, key: str, value, ttl: int = CACHE_TTL_SECONDS):
-    expires_at = (time.time() + ttl) if ttl else None
-    with cache_lock:
-        cache[key] = (value, expires_at)
+def _cache_set(cache_prefix: str, key: str, value, ttl: int = CACHE_TTL_SECONDS):
+    """Set value in Redis cache with TTL"""
+    try:
+        cache_key = f"{cache_prefix}:{key}"
+        # Convert Pydantic models to dict for JSON serialization
+        if hasattr(value, 'dict'):
+            serialized_value = value.dict()
+        else:
+            serialized_value = value
+        redis_client.setex(cache_key, ttl, json.dumps(serialized_value))
+    except Exception as e:
+        print(f"Cache set error: {e}")
 
 @app.get("/")
 async def root():
     """Health check endpoint"""
     return {"message": "Gemini API Server is running"}
-
-@app.post("/generate", response_model=PromptResponse)
-async def generate_response(request: PromptRequest):
-    """
-    Generate a response using Gemini API
-    
-    Args:
-        request: PromptRequest containing the prompt string
-        
-    Returns:
-        PromptResponse containing Gemini's response
-    """
-    try:
-        # Cache check (MVP)
-        key = request.prompt.strip()
-        cached = _cache_get(cache_generate, key)
-        if cached is not None:
-            return cached
-
-        # Add system instruction for concise responses
-        system_instruction = "You are a concise assistant. Provide direct, brief answers without explanations, duplications, or additional context. When asked for codes or specific information, output only what was requested in a clean format, nothing more."
-        
-        contents = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(text=f"{system_instruction}\n\nUser request: {request.prompt}"),
-                ],
-            )
-        ]
-        tools = [
-        types.Tool(googleSearch=types.GoogleSearch(
-        )),
-    ]
-        generate_content_config = types.GenerateContentConfig(
-        tools=tools,
-        response_mime_type="text/plain",
-    )
-        
-        # Generate response from Gemini
-        response = ""
-        
-        for chunk in client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generate_content_config,
-        ):
-            print(chunk.text, end="")
-            response += chunk.text
-
-        # Clean up response - remove duplications and extra whitespace
-        response = response.strip()
-        
-        # Remove obvious duplications (if the same text appears twice)
-        lines = response.split('\n')
-        seen = set()
-        cleaned_lines = []
-        for line in lines:
-            line = line.strip()
-            if line and line not in seen:
-                seen.add(line)
-                cleaned_lines.append(line)
-        
-        if cleaned_lines:
-            response = '\n'.join(cleaned_lines)
-
-        if not response:
-            raise HTTPException(status_code=500, detail="No response generated from Gemini")
-
-        # Store in cache before returning
-        resp_obj = PromptResponse(response=response)
-        _cache_set(cache_generate, key, resp_obj)
-        return resp_obj
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
-
-@app.post("/codes", response_model=CodesResponse)
-async def get_codes(request: PromptRequest):
-    """
-    Get codes using web search and parse into structured format
-    
-    Args:
-        request: PromptRequest containing the prompt string
-        
-    Returns:
-        CodesResponse containing a list of codes
-    """
-    try:
-        # Cache check (MVP)
-        key = request.prompt.strip()
-        cached = _cache_get(cache_codes, key)
-        if cached is not None:
-            return cached
-
-        # Add system instruction for finding codes
-        system_instruction = "You are a code finder. Search the web for coupon codes based on the user's request. Return only the actual codes you find, separated by commas or on new lines. Include any conditions or restrictions if mentioned (e.g., minimum purchase, new customers only, expiration dates). Format: CODE - description/conditions. Do not include long explanations."
-        
-        contents = [
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(text=f"{system_instruction}\n\nUser request: {request.prompt}"),
-                ],
-            )
-        ]
-        
-        tools = [
-            types.Tool(googleSearch=types.GoogleSearch()),
-        ]
-        
-        generate_content_config = types.GenerateContentConfig(
-            tools=tools,
-            response_mime_type="text/plain",
-        )
-        
-        # Generate response from Gemini
-        response = ""
-        
-        for chunk in client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generate_content_config,
-        ):
-            if chunk.text:
-                print(chunk.text, end="")
-                response += chunk.text
-
-        if not response:
-            raise HTTPException(status_code=500, detail="No response generated from Gemini")
-
-        # Parse the response to extract codes
-        codes = []
-        
-        # Clean up response first
-        response = response.strip()
-        
-        # Common words that are not codes
-        excluded_words = {
-            'FOUND', 'SEVERAL', 'TYPES', 'BUT', 'SPECIFIC', 'UNIVERSALLY', 'APPLICABLE', 
-            'ARE', 'LESS', 'COMMON', 'MANY', 'ACTIVATED', 'THROUGH', 'MEMBERSHIP',
-            'VERIFICATION', 'AUTOMATICALLY', 'APPLIED', 'DURING', 'SALES', 'BASED',
-            'THE', 'SEARCH', 'RESULTS', 'HERE', 'SOME', 'GENERAL', 'DISCOUNT',
-            'CATEGORIES', 'AND', 'OFFERS', 'THAT', 'FUNCTION', 'LIKE', 'CODES',
-            'WIDELY', 'OFF', 'REQUIRES', 'OFTEN', 'FOR', 'MEMBERS', 'APP',
-            'ORDER', 'FREE', 'SHIPPING', 'EARLY', 'ACCESS', 'EXCLUSIVE', 'CODE',
-            'SIGNING', 'MENTIONED', 'SNIPPETS', 'TIME', 'SENSITIVE', 'REQUIRE',
-            'CONDITIONS', 'BUYING', 'MULTIPLE', 'ITEMS', 'CANNOT', 'PROVIDE',
-            'ACTUAL', 'VALID', 'CURRENTLY', 'ACTIVE', 'ALPHANUMERIC', 'WITHOUT',
-            'ONGOING', 'PROMOTION', 'INDICATE', 'PROCESSES', 'RATHER', 'THAN',
-            'SIMPLE', 'PUBLIC', 'THEREFORE', 'THERE', 'LIST', 'DIRECTLY',
-            'REQUESTED', 'FORMAT', 'DIFFERENT', 'VERIFY', 'WITH', 'BIRTHDAY',
-            'NIKE', 'AMAZON', 'WALMART', 'MCDONALDS', 'MCDONALD', 'DISCOUNT',
-            'COUPON', 'PROMO', 'DEAL', 'SALE', 'SAVE', 'PERCENT', 'DOLLAR',
-            'UNFORTUNATELY', 'DEALS', 'SPECIFIC', 'FOLLOWING', 'AVAILABLE',
-            'CURRENTLY', 'WEBSITE', 'ONLINE', 'STORE', 'PURCHASE', 'CHECKOUT'
-        }
-        
-        # Split by common separators and clean each part
-        for separator in [',', '\n', ';']:
-            if separator in response:
-                parts = response.split(separator)
-                for part in parts:
-                    code = part.strip().upper()
-                    # Enhanced validation: codes are usually alphanumeric, reasonable length, and not common words
-                    if (code and len(code) >= 3 and len(code) <= 20 and 
-                        code.replace('-', '').replace('_', '').isalnum() and
-                        code not in excluded_words and
-                        code not in codes):
-                        codes.append(code)
-                break
-        
-        # If no separators found, try to extract individual words that look like codes
-        if not codes:
-            words = response.split()
-            for word in words:
-                word = word.strip('.,!?()[]{}').upper()
-                if (word and len(word) >= 3 and len(word) <= 20 and 
-                    word.replace('-', '').replace('_', '').isalnum() and
-                    word not in excluded_words and
-                    word not in codes):
-                    codes.append(word)
-        
-        # Store in cache before returning
-        resp_obj = CodesResponse(codes=codes)
-        _cache_set(cache_codes, key, resp_obj)
-        return resp_obj
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating codes: {str(e)}")
 
 @app.post("/codes-detailed", response_model=DetailedCodesResponse)
 async def get_detailed_codes(request: PromptRequest):
@@ -294,9 +104,9 @@ async def get_detailed_codes(request: PromptRequest):
     try:
         # Cache check (MVP)
         key = request.prompt.strip()
-        cached = _cache_get(cache_detailed_codes, key)
+        cached = _cache_get("codes_detailed", key)
         if cached is not None:
-            return cached
+            return DetailedCodesResponse(**cached)
 
         # Add system instruction for finding codes with details
         system_instruction = """You are a detailed code finder. Search the web for coupon codes based on the user's request. 
@@ -466,7 +276,7 @@ async def get_detailed_codes(request: PromptRequest):
         
         # Store in cache before returning
         resp_obj = DetailedCodesResponse(codes=detailed_codes)
-        _cache_set(cache_detailed_codes, key, resp_obj)
+        _cache_set("codes_detailed", key, resp_obj)
         return resp_obj
 
     except Exception as e:
