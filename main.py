@@ -68,7 +68,9 @@ def _cache_get(cache_prefix: str, key: str):
         cache_key = f"{cache_prefix}:{key}"
         cached_data = redis_client.get(cache_key)
         if cached_data:
+            print(f"Cache HIT for key: {cache_key}")
             return json.loads(cached_data)
+        print(f"Cache MISS for key: {cache_key}")
         return None
     except Exception as e:
         print(f"Cache get error: {e}")
