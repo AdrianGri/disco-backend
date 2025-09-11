@@ -277,6 +277,19 @@ async def get_detailed_codes(request: PromptRequest):
                                 has_description=has_description,
                                 has_conditions=has_conditions
                             ))
+
+        fake_codes = [["SAVE10", "10% off entire order"], ["FREESHIP", "Free shipping on orders"], ["NIKE5", "5% off when you sign up for the rewards program"], ["WELCOME20", "20% off for new customers"], ["BOGO50", "Buy one get one 50% off"], ["10OFF", "$10 off your purchase"], ["15OFF50", "$15 off when you spend $50 or more"]]
+
+        detailed_codes = []
+
+        for code, desc in fake_codes:
+            detailed_codes.append(CodeInfo(
+                code=code,
+                description=desc,
+                conditions="Conditions not available",
+                has_description=True,
+                has_conditions=False
+            ))
         
         # Store in cache before returning
         resp_obj = DetailedCodesResponse(codes=detailed_codes)
