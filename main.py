@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
@@ -110,6 +111,9 @@ async def get_detailed_codes(request: PromptRequest):
         key = request.prompt.strip()
         cached = _cache_get("codes_detailed", key)
         if cached is not None:
+            # Wait 1 second
+            await asyncio.sleep(1)
+
             return DetailedCodesResponse(**cached)
 
         # Add system instruction for finding codes with details
