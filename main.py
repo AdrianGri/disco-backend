@@ -282,7 +282,7 @@ async def get_detailed_codes(request: PromptRequest):
                                 has_conditions=has_conditions
                             ))
 
-        fake_codes = [["SAVE10", "10% off entire order"], ["FREESHIP", "Free shipping on orders"], ["WELCOME20", "20% off for new customers"], ["BOGO50", "Buy one get one 50% off"], ["10OFF", "$10 off your purchase"], ["15OFF50", "$15 off when you spend $50 or more"]]
+        fake_codes = [["SAVE10", "10% off entire order"], ["FREESHIP", "Free shipping on orders"], ["WELCOME20", "20% off for new customers"], ["ADIDAS5", "5% off when you join the Adidas rewards program"] ["BOGO50", "Buy one get one 50% off"], ["10OFF", "$10 off your purchase"], ["15OFF50", "$15 off when you spend $50 or more"]]
 
         detailed_codes = []
 
