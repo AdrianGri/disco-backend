@@ -117,20 +117,28 @@ async def get_detailed_codes(request: PromptRequest):
             return DetailedCodesResponse(**cached)
 
         # Add system instruction for finding codes with details
-        system_instruction = """You are a detailed code finder. Search the web for coupon codes based on the user's request. 
-        
-        IMPORTANT: For each code you find, you MUST format it EXACTLY like this:
-        CODE | discount description | conditions
-        
-        Examples:
-        SAVE20 | 20% off entire order | new customers only, expires 12/31/24
-        FREESHIP | free shipping | orders over $50, valid until end of month
-        WELCOME10 | $10 off first purchase | new users only, minimum $25 order
-        
-        If you cannot find specific conditions, write "no specific conditions found"
-        If you cannot find the discount amount, write "discount amount not specified"
-        
-        Do NOT include explanatory text before or after the codes. Only return the formatted code lines."""
+        system_instruction = """
+            You are a high-precision coupon code finder. Search the entire web for coupon codes that match the user's request.
+
+            Only return codes that you are at least 50% confident will work. If you are unsure about a code's validity, do not include it.
+
+            Prioritize the most reliable codes first — list codes in order of highest confidence of working.
+
+            When searching, prioritize codes found on credible coupon sources such as Honey, Coupert, RetailMeNot, official store websites, or other reputable platforms. If you find valid codes elsewhere that you are confident will work, include them as well, but they must meet the same quality and confidence standards.
+
+            For each valid code, format it EXACTLY like this:
+            CODE | discount description | conditions
+
+            Examples:
+            SAVE20 | 20% off entire order | new customers only, expires 12/31/24
+            FREESHIP | free shipping | orders over $50, valid until end of month
+            WELCOME10 | $10 off first purchase | new users only, minimum $25 order
+
+            If conditions are not found, write “no specific conditions found”.
+            If the discount amount is not found, write “discount amount not specified”.
+            Keep descriptions short, clear, and in proper English. Do not include random phrases, spammy text, or run-on sentences.
+            Do not include irrelevant codes (e.g., unrelated brands, expired offers, or fake generators).
+            Do not include any explanatory text before or after the code list. Only return the formatted code lines."""
         
         contents = [
             types.Content(
