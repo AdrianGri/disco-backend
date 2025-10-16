@@ -290,8 +290,21 @@ async def get_detailed_codes(request: PromptRequest):
                                 has_conditions=has_conditions
                             ))
         
+        # Remove duplicate codes
+        unique_codes = {}
+
+        for code_info in detailed_codes:
+            if code_info.code not in unique_codes:
+                unique_codes[code_info.code] = code_info
+            else:
+                # If duplicate, prefer the one with more info
+                existing = unique_codes[code_info.code]
+                if (code_info.has_description and not existing.has_description) or \
+                   (code_info.has_conditions and not existing.has_conditions):
+                    unique_codes[code_info.code] = code_info
+        
         # Store in cache before returning
-        resp_obj = DetailedCodesResponse(codes=detailed_codes)
+        resp_obj = DetailedCodesResponse(codes=list(unique_codes.values()))
         _cache_set("codes_detailed", key, resp_obj)
         return resp_obj
 
