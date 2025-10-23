@@ -158,17 +158,40 @@ async def get_detailed_codes(request: PromptRequest):
             response_mime_type="text/plain",
         )
         
-        # Generate response from Gemini
+        # Generate response from Gemini with retry logic for 503 errors
         response = ""
+        max_retries = 2
+        retry_count = 0
         
-        for chunk in client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generate_content_config,
-        ):
-            if chunk.text:
-                print(chunk.text, end="")
-                response += chunk.text
+        while retry_count <= max_retries:
+            try:
+                for chunk in client.models.generate_content_stream(
+                    model=model,
+                    contents=contents,
+                    config=generate_content_config,
+                ):
+                    if chunk.text:
+                        print(chunk.text, end="")
+                        response += chunk.text
+                
+                # If we got here without exception, break out of retry loop
+                break
+                
+            except Exception as api_error:
+                # Check if it's a 503 error
+                error_message = str(api_error)
+                is_503_error = "503" in error_message or "Service Unavailable" in error_message
+                
+                if is_503_error and retry_count < max_retries:
+                    retry_count += 1
+                    print(f"\n503 error encountered. Retrying ({retry_count}/{max_retries})...")
+                    # Wait a bit before retrying (exponential backoff)
+                    await asyncio.sleep(2 ** retry_count)
+                    response = ""  # Reset response for retry
+                    continue
+                else:
+                    # If it's not a 503 error, or we've exhausted retries, re-raise
+                    raise
 
         if not response:
             raise HTTPException(status_code=500, detail="No response generated from Gemini")
