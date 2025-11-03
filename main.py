@@ -400,13 +400,37 @@ Do not include any explanatory text before or after the code list. Only return t
         
         # Extract the output text from the response
         try:
-            output_text = response.output_text
+            # Debug: print the full response structure
+            print(f"\n[Response type]: {type(response)}")
+            print(f"[Response dir]: {dir(response)}")
+            
+            # Try different ways to access the output
+            if hasattr(response, 'output_text'):
+                output_text = response.output_text
+                print(f"[Using output_text]: {output_text[:200] if output_text else 'None'}")
+            elif hasattr(response, 'output'):
+                print(f"[Response has output]: {response.output}")
+                # Navigate through output to find text
+                for item in response.output:
+                    print(f"[Output item type]: {item.type if hasattr(item, 'type') else type(item)}")
+                    if hasattr(item, 'type') and item.type == 'message':
+                        if hasattr(item, 'content'):
+                            for content in item.content:
+                                if hasattr(content, 'type') and content.type == 'output_text':
+                                    output_text = content.text
+                                    print(f"[Found text in message]: {output_text[:200] if output_text else 'None'}")
+                                    break
+            else:
+                output_text = str(response)
+                print(f"[Using str(response)]: {output_text[:200]}")
+                
         except Exception as e:
             print(f"\n[Error accessing output_text]: {type(e).__name__}: {str(e)}")
             print(f"[Response object]: {response}")
             raise
         
         if not output_text:
+            print(f"[Full response object]: {response}")
             raise HTTPException(status_code=500, detail="No response generated from ChatGPT")
 
         # Log the raw output before cleaning
