@@ -387,9 +387,15 @@ Do not include irrelevant codes (e.g., unrelated brands, expired offers, or fake
 Do not include any explanatory text before or after the code list. Only return the formatted code lines."""
 
         # Use ChatGPT Responses API with web search
+        # Using low reasoning effort for faster responses (better for quick coupon lookups)
         response = openai_client.responses.create(
             model="gpt-5",
-            tools=[{"type": "web_search"}],
+            reasoning={"effort": "low"},  # Faster searches, less deep reasoning
+            tools=[{
+                "type": "web_search",
+                # Set to False for cache-only (faster) or True for live web access (slower but more current)
+                "external_web_access": True
+            }],
             input=f"{system_instruction}\n\nUser request: {request.prompt}"
         )
         
@@ -539,4 +545,9 @@ Do not include any explanatory text before or after the code list. Only return t
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000,
+        timeout_keep_alive=120  # Increase timeout to prevent connection drops during long searches
+    )
