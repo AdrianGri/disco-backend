@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import List
 from google import genai
 from google.genai import types
+from openai import OpenAI
 import os
 import json
 from dotenv import load_dotenv
@@ -27,6 +28,13 @@ if not GEMINI_API_KEY:
 client = genai.Client(
         api_key=GEMINI_API_KEY,
     )
+
+# Configure OpenAI API
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
@@ -333,6 +341,201 @@ async def get_detailed_codes(request: PromptRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating detailed codes: {str(e)}")
+
+@app.post("/codes-detailed-chatgpt", response_model=DetailedCodesResponse)
+async def get_detailed_codes_chatgpt(request: PromptRequest):
+    """
+    Get codes with detailed information using ChatGPT with Search
+    
+    Args:
+        request: PromptRequest containing the prompt string
+        
+    Returns:
+        DetailedCodesResponse containing a list of codes with details
+    """
+    try:
+        # Cache check
+        key = request.prompt.strip()
+        cached = _cache_get("codes_detailed_chatgpt", key)
+        if cached is not None:
+            # Wait 1 second
+            await asyncio.sleep(1)
+            return DetailedCodesResponse(**cached)
+
+        # System instruction for finding codes with details
+        system_instruction = """
+You are a high-precision coupon code finder. Search the entire web for coupon codes that match the user's request.
+
+Only return codes that you are at least 50% confident will work. If you are unsure about a code's validity, do not include it.
+
+Prioritize the most reliable codes first — list codes in order of highest confidence of working.
+
+When searching, prioritize codes found on credible coupon sources such as Honey, Coupert, RetailMeNot, official store websites, or other reputable platforms. If you find valid codes elsewhere that you are confident will work, include them as well, but they must meet the same quality and confidence standards.
+
+For each valid code, format it EXACTLY like this:
+CODE | discount description | conditions
+
+Examples:
+SAVE20 | 20% off entire order | new customers only, expires 12/31/24
+FREESHIP | free shipping | orders over $50, valid until end of month
+WELCOME10 | $10 off first purchase | new users only, minimum $25 order
+
+If conditions are not found, write "no specific conditions found".
+If the discount amount is not found, write "discount amount not specified".
+Keep descriptions short, clear, and in proper English. Do not include random phrases, spammy text, or run-on sentences.
+Do not include irrelevant codes (e.g., unrelated brands, expired offers, or fake generators).
+Do not include any explanatory text before or after the code list. Only return the formatted code lines."""
+
+        # Use ChatGPT Responses API with web search
+        response = openai_client.responses.create(
+            model="gpt-5",
+            tools=[{"type": "web_search"}],
+            input=f"{system_instruction}\n\nUser request: {request.prompt}"
+        )
+        
+        # Extract the output text from the response
+        output_text = response.output_text
+        
+        if not output_text:
+            raise HTTPException(status_code=500, detail="No response generated from ChatGPT")
+
+        # Parse the response to extract detailed codes (same parsing logic as Gemini)
+        detailed_codes = []
+        
+        # Clean up response first
+        output_text = output_text.strip()
+        
+        # Enhanced list of words that are not codes
+        excluded_words = {
+            'FOUND', 'SEVERAL', 'TYPES', 'BUT', 'SPECIFIC', 'UNIVERSALLY', 'APPLICABLE', 
+            'ARE', 'LESS', 'COMMON', 'MANY', 'ACTIVATED', 'THROUGH', 'MEMBERSHIP',
+            'VERIFICATION', 'AUTOMATICALLY', 'APPLIED', 'DURING', 'SALES', 'BASED',
+            'THE', 'SEARCH', 'RESULTS', 'HERE', 'SOME', 'GENERAL', 'DISCOUNT',
+            'CATEGORIES', 'AND', 'OFFERS', 'THAT', 'FUNCTION', 'LIKE', 'CODES',
+            'WIDELY', 'OFF', 'REQUIRES', 'OFTEN', 'FOR', 'MEMBERS', 'APP',
+            'ORDER', 'FREE', 'SHIPPING', 'EARLY', 'ACCESS', 'EXCLUSIVE', 'CODE',
+            'SIGNING', 'MENTIONED', 'SNIPPETS', 'TIME', 'SENSITIVE', 'REQUIRE',
+            'CONDITIONS', 'BUYING', 'MULTIPLE', 'ITEMS', 'CANNOT', 'PROVIDE',
+            'ACTUAL', 'VALID', 'CURRENTLY', 'ACTIVE', 'ALPHANUMERIC', 'WITHOUT',
+            'ONGOING', 'PROMOTION', 'INDICATE', 'PROCESSES', 'RATHER', 'THAN',
+            'SIMPLE', 'PUBLIC', 'THEREFORE', 'THERE', 'LIST', 'DIRECTLY',
+            'REQUESTED', 'FORMAT', 'DIFFERENT', 'VERIFY', 'WITH', 'BIRTHDAY',
+            'NIKE', 'AMAZON', 'WALMART', 'MCDONALDS', 'MCDONALD', 'DISCOUNT',
+            'COUPON', 'PROMO', 'DEAL', 'SALE', 'SAVE', 'PERCENT', 'DOLLAR',
+            'UNFORTUNATELY', 'DEALS', 'SPECIFIC', 'FOLLOWING', 'AVAILABLE',
+            'CURRENTLY', 'WEBSITE', 'ONLINE', 'STORE', 'PURCHASE', 'CHECKOUT',
+            'WHEN', 'YOUR', 'YOU', 'CAN', 'GET', 'USE', 'HAVE', 'WILL', 'THIS',
+            'FROM', 'WITH', 'THEIR', 'THEY', 'ALSO', 'MORE', 'SOME', 'ALL',
+            'EACH', 'ONLY', 'FIRST', 'LAST', 'NEXT', 'MAKE', 'GOOD', 'NEW',
+            'USED', 'WAY', 'MAY', 'TAKE', 'COME', 'ITS', 'NOW', 'FIND', 'LONG',
+            'DOWN', 'DAY', 'DID', 'GET', 'HAS', 'HER', 'HIM', 'HIS', 'HOW',
+            'MAN', 'OLD', 'SEE', 'TWO', 'WHO', 'BOY', 'CAME', 'ITS', 'LET',
+            'PUT', 'SAY', 'SHE', 'TOO', 'USE', 'COMPILATION', 'DETAILS',
+            'RESTRICTIONS', 'EXPIRATION', 'DATES', 'MINIMUM', 'MAXIMUM',
+            'USERS', 'CUSTOMERS', 'ORDERS', 'ITEMS', 'PRODUCTS', 'SELECTION',
+            'POPULAR', 'DEVICES', 'BOOKS', 'HOME', 'KITCHEN', 'BEAUTY',
+            'FASHION', 'DELIVERY', 'TRIAL', 'MONTH', 'STUDENT', 'PRIME',
+            'CARDS', 'FIRE', 'STICK', 'RING', 'CAMERA', 'AUDIO', 'SMART',
+            'WIRELESS', 'KINDLE', 'AUDIBLE', 'AUDIOBOOKS', 'COMPUTER',
+            'MOUNTS', 'CABLES', 'TOTAL', 'SELECTED', 'GRAPHIC', 'COMIC',
+            'LIGHTNING', 'SUBSCRIBE', 'OVER', 'SPEND', 'SELECT', 'ADDITIONALLY',
+            'PLEASE', 'NOTE', 'CHANGE', 'FREQUENTLY', 'ALWAYS', 'IDEA',
+            'TERMS', 'SITE', 'BEFORE', 'MAKING', 'PROMOTIONS', 'OTHER',
+            'WAYS', 'STILL', 'HOWEVER', 'TRADITIONAL', 'UNIVERSALLY',
+            'PROVIDES', 'VARIOUS', 'COMPILATION', 'USING'
+        }
+        
+        # Split by lines and parse each code entry
+        lines = output_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#') or len(line) < 3:
+                continue
+                
+            # Try to parse format: CODE | description | conditions
+            if '|' in line:
+                parts = [part.strip() for part in line.split('|')]
+                if len(parts) >= 2:
+                    code = parts[0].upper().strip()
+                    description = parts[1] if len(parts) > 1 else ""
+                    conditions = parts[2] if len(parts) > 2 else "no specific conditions mentioned"
+                    
+                    # Check if we have meaningful data
+                    has_description = (description and 
+                                     description.lower() not in ["discount amount not specified", "discount not specified", "amount not specified", ""]) 
+                    has_conditions = (conditions and 
+                                    conditions.lower() not in ["no specific conditions mentioned", "no specific conditions found", 
+                                                              "conditions not specified", "no conditions", ""]) 
+                    
+                    # Set placeholders if no meaningful data
+                    if not has_description:
+                        description = "Discount amount not available"
+                    if not has_conditions:
+                        conditions = "Conditions not available"
+                    
+                    # Validate code format - more strict validation
+                    if (code and len(code) >= 3 and len(code) <= 20 and 
+                        code.replace('-', '').replace('_', '').replace('%', '').isalnum() and
+                        code not in excluded_words and
+                        # Additional check: code should contain some numbers or be mostly uppercase
+                        (any(c.isdigit() for c in code) or code.isupper())):
+                        detailed_codes.append(CodeInfo(
+                            code=code,
+                            description=description,
+                            conditions=conditions,
+                            has_description=has_description,
+                            has_conditions=has_conditions
+                        ))
+            else:
+                # Look for patterns that clearly indicate codes with conditions
+                # e.g., "SAVE20 - 20% off orders over $50"
+                if ' - ' in line:
+                    parts = line.split(' - ', 1)
+                    if len(parts) == 2:
+                        code = parts[0].strip().upper()
+                        description = parts[1].strip()
+                        
+                        # Check if we have meaningful description
+                        has_description = (description and 
+                                         description.lower() not in ["discount amount not specified", "discount not specified", "amount not specified"]) 
+                        has_conditions = False  # No conditions in dash format
+                        
+                        # Set placeholder if no meaningful data
+                        if not has_description:
+                            description = "Discount amount not available"
+                        
+                        if (code and len(code) >= 3 and len(code) <= 20 and 
+                            code.replace('-', '').replace('_', '').isalnum() and
+                            code not in excluded_words and
+                            (any(c.isdigit() for c in code) or code.isupper())):
+                            detailed_codes.append(CodeInfo(
+                                code=code,
+                                description=description,
+                                conditions="Conditions not available",
+                                has_description=has_description,
+                                has_conditions=has_conditions
+                            ))
+        
+        # Remove duplicate codes
+        unique_codes = {}
+
+        for code_info in detailed_codes:
+            if code_info.code not in unique_codes:
+                unique_codes[code_info.code] = code_info
+            else:
+                # If duplicate, prefer the one with more info
+                existing = unique_codes[code_info.code]
+                if (code_info.has_description and not existing.has_description) or \
+                   (code_info.has_conditions and not existing.has_conditions):
+                    unique_codes[code_info.code] = code_info
+        
+        # Store in cache before returning
+        resp_obj = DetailedCodesResponse(codes=list(unique_codes.values()))
+        _cache_set("codes_detailed_chatgpt", key, resp_obj)
+        return resp_obj
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating detailed codes with ChatGPT: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
