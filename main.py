@@ -399,7 +399,12 @@ Do not include any explanatory text before or after the code list. Only return t
         )
         
         # Extract the output text from the response
-        output_text = response.output_text
+        try:
+            output_text = response.output_text
+        except Exception as e:
+            print(f"\n[Error accessing output_text]: {type(e).__name__}: {str(e)}")
+            print(f"[Response object]: {response}")
+            raise
         
         if not output_text:
             raise HTTPException(status_code=500, detail="No response generated from ChatGPT")
@@ -563,6 +568,9 @@ Do not include any explanatory text before or after the code list. Only return t
         return resp_obj
 
     except Exception as e:
+        print(f"\n[ChatGPT Error] {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error generating detailed codes with ChatGPT: {str(e)}")
 
 if __name__ == "__main__":
