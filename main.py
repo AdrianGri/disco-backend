@@ -370,7 +370,7 @@ Only return codes that you are at least 50% confident will work. If you are unsu
 
 Prioritize the most reliable codes first — list codes in order of highest confidence of working.
 
-When searching, prioritize codes found on credible coupon sources such as Honey, Coupert, RetailMeNot, official store websites, or other reputable platforms. If you find valid codes elsewhere that you are confident will work, include them as well, but they must meet the same quality and confidence standards.
+When searching, prioritize codes found on credible coupon sources such as Honey, Coupert, RetailMeNot, official store websites, or other reputable platforms.
 
 For each valid code, format it EXACTLY like this:
 CODE | discount description | conditions
@@ -399,39 +399,31 @@ Do not include any explanatory text before or after the code list. Only return t
         )
         
         # Extract the output text from the response
-        try:
-            # Debug: print the full response structure
-            print(f"\n[Response type]: {type(response)}")
-            print(f"[Response dir]: {dir(response)}")
-            
-            # Try different ways to access the output
-            if hasattr(response, 'output_text'):
-                output_text = response.output_text
-                print(f"[Using output_text]: {output_text[:200] if output_text else 'None'}")
-            elif hasattr(response, 'output'):
-                print(f"[Response has output]: {response.output}")
-                # Navigate through output to find text
-                for item in response.output:
-                    print(f"[Output item type]: {item.type if hasattr(item, 'type') else type(item)}")
-                    if hasattr(item, 'type') and item.type == 'message':
-                        if hasattr(item, 'content'):
-                            for content in item.content:
-                                if hasattr(content, 'type') and content.type == 'output_text':
-                                    output_text = content.text
-                                    print(f"[Found text in message]: {output_text[:200] if output_text else 'None'}")
+        output_text = None
+        
+        # The Responses API returns output as a list of items
+        # We need to find the message item and extract its text
+        if hasattr(response, 'output') and response.output:
+            for item in response.output:
+                if hasattr(item, 'type') and item.type == 'message':
+                    if hasattr(item, 'content') and item.content:
+                        for content_item in item.content:
+                            if hasattr(content_item, 'type') and content_item.type == 'output_text':
+                                if hasattr(content_item, 'text'):
+                                    output_text = content_item.text
                                     break
-            else:
-                output_text = str(response)
-                print(f"[Using str(response)]: {output_text[:200]}")
-                
-        except Exception as e:
-            print(f"\n[Error accessing output_text]: {type(e).__name__}: {str(e)}")
-            print(f"[Response object]: {response}")
-            raise
+                    if output_text:
+                        break
+        
+        # Fallback to output_text attribute if available
+        if not output_text and hasattr(response, 'output_text'):
+            output_text = response.output_text
         
         if not output_text:
-            print(f"[Full response object]: {response}")
-            raise HTTPException(status_code=500, detail="No response generated from ChatGPT")
+            # Return empty list just like Gemini endpoint does
+            resp_obj = DetailedCodesResponse(codes=[])
+            _cache_set("codes_detailed_chatgpt", key, resp_obj)
+            return resp_obj
 
         # Log the raw output before cleaning
         print("\n" + "="*80)
