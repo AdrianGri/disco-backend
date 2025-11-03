@@ -393,7 +393,6 @@ Do not include any explanatory text before or after the code list. Only return t
             reasoning={"effort": "low"},  # Faster searches, less deep reasoning
             tools=[{
                 "type": "web_search",
-                # Set to False for cache-only (faster) or True for live web access (slower but more current)
                 "external_web_access": True
             }],
             input=f"{system_instruction}\n\nUser request: {request.prompt}"
@@ -405,11 +404,30 @@ Do not include any explanatory text before or after the code list. Only return t
         if not output_text:
             raise HTTPException(status_code=500, detail="No response generated from ChatGPT")
 
+        # Log the raw output before cleaning
+        print("\n" + "="*80)
+        print("[ChatGPT Raw Output - Before Cleaning]")
+        print("="*80)
+        print(output_text)
+        print("="*80 + "\n")
+
         # Parse the response to extract detailed codes (same parsing logic as Gemini)
         detailed_codes = []
         
         # Clean up response first
         output_text = output_text.strip()
+        
+        # Function to clean source references from text
+        def clean_source_references(text: str) -> str:
+            """Remove source citations like ([joinhoney.com]) or (https://...) from text"""
+            import re
+            # Remove parenthetical source citations
+            text = re.sub(r'\s*\([^)]*(?:\.com|\.org|\.net|https?://)[^)]*\)', '', text)
+            # Remove bracketed URLs
+            text = re.sub(r'\s*\[[^\]]*(?:\.com|\.org|\.net|https?://)[^\]]*\]', '', text)
+            # Clean up extra spaces
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
         
         # Enhanced list of words that are not codes
         excluded_words = {
@@ -465,6 +483,10 @@ Do not include any explanatory text before or after the code list. Only return t
                     code = parts[0].upper().strip()
                     description = parts[1] if len(parts) > 1 else ""
                     conditions = parts[2] if len(parts) > 2 else "no specific conditions mentioned"
+                    
+                    # Clean source references from description and conditions
+                    description = clean_source_references(description)
+                    conditions = clean_source_references(conditions)
                     
                     # Check if we have meaningful data
                     has_description = (description and 
